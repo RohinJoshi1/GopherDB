@@ -307,3 +307,141 @@ func (n *Node) split(nodeToSplit *Node, nodeToSplitIndex int) {
 
 	n.writeNodes(n, nodeToSplit)
 }
+//Deletion 
+
+//Delete from LeafNode 
+//Simply delete from node 
+
+func(n *Node) removeItemFromLeaf(index int){
+	n.items = append(n.items[:index], n.items[index+1:]...)
+	n.writeNodes(n)
+}
+
+//Delete internal Node: Find rightmost child from left subtree, delete that pair from leaf, and replace node to be deleted with the rightmost child of LST  
+
+func (n *Node) removeItemFromInternal(index int)([]int, error){
+	affectedNodes := make([]int,0)
+	affectedNodes = append(affectedNodes, index)
+	//Get left tree 
+	lNode, err := n.getNode(n.childNodes[index])
+	if err!= nil {
+		return nil,err
+	}
+	//Go right 
+	for !lNode.isLeaf(){
+		rIndex := len(n.childNodes)-1 
+		lNode,err = lNode.getNode(lNode.childNodes[rIndex])
+		if err!=nil{
+			return nil,err
+		}
+		affectedNodes = append(affectedNodes, rIndex)
+	}
+	n.items[index] = lNode.items[len(lNode.items)-1]
+	lNode.items = lNode.items[:len(lNode.items)-1]
+	n.writeNodes(n,lNode)
+	return affectedNodes,nil
+}
+
+
+//Helper functions for rotations 
+func rotateRight(leftNode *Node, rightNode *Node,parentNode *Node, rightNodeIndex int){
+	leftNodeItem := leftNode.items[len(leftNode.items)-1]
+	leftNode.items = leftNode.items[:len(leftNode.items)-1]
+	pNodeIndex := rightNodeIndex-1 
+	if isFirst(pNodeIndex){
+		pNodeIndex = 0 
+	}
+	pNodeItem := parentNode.items[pNodeIndex]
+	parentNode.items[pNodeIndex] = leftNodeItem 
+	rightNode.items = append([]*Item{pNodeItem},rightNode.items...)
+	//Transfer any children 
+	if !leftNode.isLeaf(){
+		child := leftNode.childNodes[len(leftNode.childNodes)-1]
+		leftNode.childNodes = leftNode.childNodes[:len(leftNode.childNodes)-1]
+		rightNode.childNodes = append([]pgnum{child},rightNode.childNodes...)
+	}
+
+}
+func rotateLeft(leftNode *Node, rightNode *Node,parentNode *Node, rightNodeIndex int){
+	rightNodeItem := rightNode.items[0]
+	rightNode.items = rightNode.items[1:]
+	pNodeIndex := rightNodeIndex
+	if isLast(pNodeIndex,parentNode){
+		pNodeIndex = len(parentNode.items)-1 
+	}
+	pNodeItem := parentNode.items[pNodeIndex]
+	parentNode.items[pNodeIndex] = rightNodeItem 
+	leftNode.items = append(leftNode.items,pNodeItem)
+	//Transfer any children 
+	if !rightNode.isLeaf(){
+		child := rightNode.childNodes[0]
+		rightNode.childNodes = rightNode.childNodes[1:]
+		leftNode.childNodes = append(leftNode.childNodes,child)
+	}
+}
+//Merge: receive node and index, transfer node to left child with it's KV pairs and child pointers and delete node 
+//Needs to be accompanied by rebalance later 
+
+func (n *Node) merge(bNode *Node, bNodeIndex int) error {
+	// 	               p                                     p
+	//                    3,5                                    5
+	//	      /        |       \       ------>         /          \
+	//          a          b        c                     a            c
+	//         1,2         4        6,7                 1,2,3,4         6,7
+	aNode, err := n.getNode(n.childNodes[bNodeIndex-1])
+	if err!=nil{
+		return err 
+	}
+	// Take the item from the parent, remove it and add it to the unbalanced node
+	pNodeItem := n.items[bNodeIndex-1]
+	n.items = append(n.items[:bNodeIndex-1], n.items[bNodeIndex:]...)
+	aNode.items = append(aNode.items, pNodeItem)
+
+	aNode.items = append(aNode.items, bNode.items...)
+	n.childNodes = append(n.childNodes[:bNodeIndex], n.childNodes[bNodeIndex+1:]...)
+	if !aNode.isLeaf() {
+		aNode.childNodes = append(aNode.childNodes, bNode.childNodes...)
+	}
+
+	n.writeNodes(aNode, n)
+	n.dal.deleteNode(bNode.pageNum)
+	return nil
+}
+//3 Cases: Left rotate, right rotate , merge
+func (n *Node) rebalanceRemove(unabalancedNode *Node, unbalancedNodeIndex int) error {
+	parent := n
+	//I can right rotate
+	if unbalancedNodeIndex != 0{
+		leftNode, err := n.getNode(parent.childNodes[unbalancedNodeIndex-1])
+		if err!=nil{
+			return err 
+		}
+		if leftNode.canSpareAnElement(){
+			rotateRight(leftNode, unabalancedNode, parent, unbalancedNodeIndex)
+			n.writeNodes(leftNode, parent,unabalancedNode)
+			return nil
+		}
+	}
+	if unbalancedNodeIndex != len(parent.childNodes)-1{
+		rightNode,err := n.getNode(parent.childNodes[unbalancedNodeIndex+1])
+		if err!=nil{
+			return err 
+		}
+		if rightNode.canSpareAnElement(){
+			rotateLeft(unabalancedNode,rightNode,parent,unbalancedNodeIndex)
+			n.writeNodes(unabalancedNode, parent,rightNode)
+			return nil
+		}
+	}
+	if unbalancedNodeIndex == 0{
+		rightNode, err := n.getNode(parent.childNodes[unbalancedNodeIndex+1])
+		if err!=nil{
+			return err 
+		}
+		return parent.merge(rightNode,unbalancedNodeIndex+1)
+	}
+	return parent.merge(unabalancedNode,unbalancedNodeIndex) 
+}
+
+
+
