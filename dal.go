@@ -86,7 +86,10 @@ func newDal(path string, options *Options) (*dal, error) {
 		dal.root = collectionsNode.pageNum
 
 		// write meta page
-		_, err = dal.writeMeta(dal.meta) // other error
+		_, err = dal.writeMeta(dal.meta)
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		return nil, err
 	}
@@ -142,7 +145,7 @@ func (d *dal) close() error {
 
 func (d *dal) allocateEmptyPage() *page {
 	return &page{
-		data: make([]byte, d.pageSize, d.pageSize),
+		data: make([]byte, d.pageSize),
 	}
 }
 
@@ -168,7 +171,6 @@ func (d *dal) newNode(items []*Item, childNodes []pgnum) *Node {
 	node.items = items
 	node.childNodes = childNodes
 	node.pageNum = d.getNextPage()
-	node.dal = d
 	return node
 }
 
@@ -180,7 +182,6 @@ func (d *dal) getNode(pageNum pgnum) (*Node, error) {
 	node := NewEmptyNode()
 	node.deserialize(p.data)
 	node.pageNum = pageNum
-	node.dal = d
 	return node, nil
 }
 

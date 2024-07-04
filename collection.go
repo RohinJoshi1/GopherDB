@@ -1,12 +1,15 @@
 package main
 
-import "bytes"
+import (
+	"bytes"
+	"encoding/binary"
+)
 
 type Collection struct {
 	name []byte
 	root pgnum
-
-	dal *dal
+	counter uint64
+	tx *tx
 }
 
 func newCollection(name []byte, root pgnum) *Collection {
@@ -16,25 +19,61 @@ func newCollection(name []byte, root pgnum) *Collection {
 	}
 }
 
+func newEmptyCollection() *Collection{
+	return &Collection{} 
+}
+
+func (c *Collection) ID() uint64{
+	if !c.tx.write{
+		return 0
+	}
+	id := c.counter  
+	c.counter+=1
+	return id
+}
+func (c *Collection) serialize() *Item{
+	buffer := make([]byte, collectionSize)
+	leftPos := 0 
+	binary.LittleEndian.PutUint64(buffer[leftPos:], uint64(c.root))
+	leftPos+=pageNumSize
+	binary.LittleEndian.PutUint64(buffer[leftPos:], c.counter)
+	leftPos+=counterSize 
+	return newItem(c.name,buffer)
+}
+func (c *Collection) deserialize(item *Item){
+	c.name = item.key 
+	if len(item.value)!=0{
+		leftPos := 0 
+		c.root = pgnum(binary.LittleEndian.Uint64(item.value[leftPos:]))
+		leftPos+=pageNumSize
+		c.counter = binary.LittleEndian.Uint64(item.value[leftPos:])
+		leftPos+=counterSize
+	}
+}
+
 // Put adds a key to the tree. It finds the correct node and the insertion index and adds the item. When performing the
 // search, the ancestors are returned as well. This way we can iterate over them to check which nodes were modified and
 // rebalance by splitting them accordingly. If the root has too many items, then a new root of a new layer is
 // created and the created nodes from the split are added as children.
 func (c *Collection) Put(key []byte, value []byte) error {
+	if !c.tx.write{
+		return errWriteInsideReadTxErr
+	}
 	i := newItem(key, value)
 
 	// On first insertion the root node does not exist, so it should be created
 	var root *Node
 	var err error
 	if c.root == 0 {
-		root, err = c.dal.writeNode(c.dal.newNode([]*Item{i}, []pgnum{}))
+		// root, err = c.tx.writeNode(c.tx.newNode([]*Item{i}, []pgnum{}))
+		root = c.tx.writeNode(c.tx.newNode([]*Item{i}, []pgnum{}))
 		if err != nil {
 			return nil
 		}
 		c.root = root.pageNum
 		return nil
 	} else {
-		root, err = c.dal.getNode(c.root)
+		root, err = c.tx.getNode(c.root)
 		if err != nil {
 			return err
 		}
@@ -73,11 +112,11 @@ func (c *Collection) Put(key []byte, value []byte) error {
 	// Handle root
 	rootNode := ancestors[0]
 	if rootNode.isOverPopulated() {
-		newRoot := c.dal.newNode([]*Item{}, []pgnum{rootNode.pageNum})
+		newRoot := c.tx.newNode([]*Item{}, []pgnum{rootNode.pageNum})
 		newRoot.split(rootNode, 0)
 
 		// commit newly created root
-		newRoot, err = c.dal.writeNode(newRoot)
+		newRoot = c.tx.writeNode(newRoot)
 		if err != nil {
 			return err
 		}
@@ -90,7 +129,7 @@ func (c *Collection) Put(key []byte, value []byte) error {
 
 // Find Returns an item according based on the given key by performing a binary search.
 func (c *Collection) Find(key []byte) (*Item, error) {
-	n, err := c.dal.getNode(c.root)
+	n, err := c.tx.getNode(c.root)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +154,7 @@ func (c *Collection) Find(key []byte) (*Item, error) {
 // c       d   e     f
 // For [0,1,0] -> p,b,e
 func (c *Collection) getNodes(indexes []int) ([]*Node, error) {
-	root, err := c.dal.getNode(c.root)
+	root, err := c.tx.getNode(c.root)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +162,7 @@ func (c *Collection) getNodes(indexes []int) ([]*Node, error) {
 	nodes := []*Node{root}
 	child := root
 	for i := 1; i < len(indexes); i++ {
-		child, err = c.dal.getNode(child.childNodes[indexes[i]])
+		child, err = c.tx.getNode(child.childNodes[indexes[i]])
 		if err != nil {
 			return nil, err
 		}
@@ -132,8 +171,11 @@ func (c *Collection) getNodes(indexes []int) ([]*Node, error) {
 	return nodes, nil
 }
 func (c *Collection) Remove(key []byte) error {
+	if !c.tx.write{
+		return errWriteInsideReadTxErr
+	}
 	// Find the path to the node where the deletion should happen
-	rootNode, err := c.dal.getNode(c.root)
+	rootNode, err := c.tx.getNode(c.root)
 	if err != nil {
 		return err
 	}
@@ -182,3 +224,5 @@ func (c *Collection) Remove(key []byte) error {
 
 	return nil
 }
+
+

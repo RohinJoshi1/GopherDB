@@ -11,7 +11,7 @@ type Item struct {
 }
 
 type Node struct {
-	*dal
+	*tx
 
 	pageNum    pgnum
 	items      []*Item
@@ -50,7 +50,7 @@ func (n *Node) isLeaf() bool {
 }
 
 func (n *Node) writeNode(node *Node) *Node {
-	node, _ = n.dal.writeNode(node)
+	node, _ = n.tx.db.writeNode(node)
 	return node
 }
 
@@ -61,26 +61,23 @@ func (n *Node) writeNodes(nodes ...*Node) {
 }
 
 func (n *Node) getNode(pageNum pgnum) (*Node, error) {
-	return n.dal.getNode(pageNum)
+	return n.tx.db.getNode(pageNum)
 }
 
 // isOverPopulated checks if the node size is bigger than the size of a page.
 func (n *Node) isOverPopulated() bool {
-	return n.dal.isOverPopulated(n)
+	return n.tx.db.isOverPopulated(n)
 }
 
 // canSpareAnElement checks if the node size is big enough to populate a page after giving away one item.
 func (n *Node) canSpareAnElement() bool {
-	splitIndex := n.dal.getSplitIndex(n)
-	if splitIndex == -1 {
-		return false
-	}
-	return true
+	splitIndex := n.tx.db.getSplitIndex(n)
+	return splitIndex != -1
 }
 
 // isUnderPopulated checks if the node size is smaller than the size of a page.
 func (n *Node) isUnderPopulated() bool {
-	return n.dal.isUnderPopulated(n)
+	return n.tx.db.isUnderPopulated(n)
 }
 
 func (n *Node) serialize(buf []byte) []byte {
@@ -280,20 +277,20 @@ func (n *Node) addItem(item *Item, insertionIndex int) int {
 }
 
 // split rebalances the tree after adding. After insertion the modified node has to be checked to make sure it
-// didn't exceed the maximum number of elements. If it did, then it has to be split and rebalanced. 
+// didn't exceed the maximum number of elements. If it did, then it has to be split and rebalanced.
 func (n *Node) split(nodeToSplit *Node, nodeToSplitIndex int) {
 	// The first index where min amount of bytes to populate a page is achieved. Then add 1 so it will be split one
 	// index after.
-	splitIndex := nodeToSplit.dal.getSplitIndex(nodeToSplit)
+	splitIndex := nodeToSplit.tx.db.getSplitIndex(nodeToSplit)
 
 	middleItem := nodeToSplit.items[splitIndex]
 	var newNode *Node
 
 	if nodeToSplit.isLeaf() {
-		newNode = n.writeNode(n.dal.newNode(nodeToSplit.items[splitIndex+1:], []pgnum{}))
+		newNode = n.writeNode(n.tx.db.newNode(nodeToSplit.items[splitIndex+1:], []pgnum{}))
 		nodeToSplit.items = nodeToSplit.items[:splitIndex]
 	} else {
-		newNode = n.writeNode(n.dal.newNode(nodeToSplit.items[splitIndex+1:], nodeToSplit.childNodes[splitIndex+1:]))
+		newNode = n.writeNode(n.tx.db.newNode(nodeToSplit.items[splitIndex+1:], nodeToSplit.childNodes[splitIndex+1:]))
 		nodeToSplit.items = nodeToSplit.items[:splitIndex]
 		nodeToSplit.childNodes = nodeToSplit.childNodes[:splitIndex+1]
 	}
@@ -307,80 +304,81 @@ func (n *Node) split(nodeToSplit *Node, nodeToSplitIndex int) {
 
 	n.writeNodes(n, nodeToSplit)
 }
-//Deletion 
 
-//Delete from LeafNode 
-//Simply delete from node 
+//Deletion
 
-func(n *Node) removeItemFromLeaf(index int){
+//Delete from LeafNode
+//Simply delete from node
+
+func (n *Node) removeItemFromLeaf(index int) {
 	n.items = append(n.items[:index], n.items[index+1:]...)
 	n.writeNodes(n)
 }
 
-//Delete internal Node: Find rightmost child from left subtree, delete that pair from leaf, and replace node to be deleted with the rightmost child of LST  
+//Delete internal Node: Find rightmost child from left subtree, delete that pair from leaf, and replace node to be deleted with the rightmost child of LST
 
-func (n *Node) removeItemFromInternal(index int)([]int, error){
-	affectedNodes := make([]int,0)
+func (n *Node) removeItemFromInternal(index int) ([]int, error) {
+	affectedNodes := make([]int, 0)
 	affectedNodes = append(affectedNodes, index)
-	//Get left tree 
+	//Get left tree
 	lNode, err := n.getNode(n.childNodes[index])
-	if err!= nil {
-		return nil,err
+	if err != nil {
+		return nil, err
 	}
-	//Go right 
-	for !lNode.isLeaf(){
-		rIndex := len(n.childNodes)-1 
-		lNode,err = lNode.getNode(lNode.childNodes[rIndex])
-		if err!=nil{
-			return nil,err
+	//Go right
+	for !lNode.isLeaf() {
+		rIndex := len(n.childNodes) - 1
+		lNode, err = lNode.getNode(lNode.childNodes[rIndex])
+		if err != nil {
+			return nil, err
 		}
 		affectedNodes = append(affectedNodes, rIndex)
 	}
 	n.items[index] = lNode.items[len(lNode.items)-1]
 	lNode.items = lNode.items[:len(lNode.items)-1]
-	n.writeNodes(n,lNode)
-	return affectedNodes,nil
+	n.writeNodes(n, lNode)
+	return affectedNodes, nil
 }
 
-
-//Helper functions for rotations 
-func rotateRight(leftNode *Node, rightNode *Node,parentNode *Node, rightNodeIndex int){
+// Helper functions for rotations
+func rotateRight(leftNode *Node, rightNode *Node, parentNode *Node, rightNodeIndex int) {
 	leftNodeItem := leftNode.items[len(leftNode.items)-1]
 	leftNode.items = leftNode.items[:len(leftNode.items)-1]
-	pNodeIndex := rightNodeIndex-1 
-	if isFirst(pNodeIndex){
-		pNodeIndex = 0 
+	pNodeIndex := rightNodeIndex - 1
+	if isFirst(pNodeIndex) {
+		pNodeIndex = 0
 	}
 	pNodeItem := parentNode.items[pNodeIndex]
-	parentNode.items[pNodeIndex] = leftNodeItem 
-	rightNode.items = append([]*Item{pNodeItem},rightNode.items...)
-	//Transfer any children 
-	if !leftNode.isLeaf(){
+	parentNode.items[pNodeIndex] = leftNodeItem
+	rightNode.items = append([]*Item{pNodeItem}, rightNode.items...)
+	//Transfer any children
+	if !leftNode.isLeaf() {
 		child := leftNode.childNodes[len(leftNode.childNodes)-1]
 		leftNode.childNodes = leftNode.childNodes[:len(leftNode.childNodes)-1]
-		rightNode.childNodes = append([]pgnum{child},rightNode.childNodes...)
+		rightNode.childNodes = append([]pgnum{child}, rightNode.childNodes...)
 	}
 
 }
-func rotateLeft(leftNode *Node, rightNode *Node,parentNode *Node, rightNodeIndex int){
+func rotateLeft(leftNode *Node, rightNode *Node, parentNode *Node, rightNodeIndex int) {
 	rightNodeItem := rightNode.items[0]
 	rightNode.items = rightNode.items[1:]
 	pNodeIndex := rightNodeIndex
-	if isLast(pNodeIndex,parentNode){
-		pNodeIndex = len(parentNode.items)-1 
+	if isLast(pNodeIndex, parentNode) {
+		pNodeIndex = len(parentNode.items) - 1
 	}
 	pNodeItem := parentNode.items[pNodeIndex]
-	parentNode.items[pNodeIndex] = rightNodeItem 
-	leftNode.items = append(leftNode.items,pNodeItem)
-	//Transfer any children 
-	if !rightNode.isLeaf(){
+	parentNode.items[pNodeIndex] = rightNodeItem
+	leftNode.items = append(leftNode.items, pNodeItem)
+	//Transfer any children
+	if !rightNode.isLeaf() {
 		child := rightNode.childNodes[0]
 		rightNode.childNodes = rightNode.childNodes[1:]
-		leftNode.childNodes = append(leftNode.childNodes,child)
+		leftNode.childNodes = append(leftNode.childNodes, child)
 	}
 }
-//Merge: receive node and index, transfer node to left child with it's KV pairs and child pointers and delete node 
-//Needs to be accompanied by rebalance later 
+
+//Merge: receive node and index, transfer node to left child with it's KV pairs and child pointers and delete node
+//Needs to be accompanied by rebalance later
 
 func (n *Node) merge(bNode *Node, bNodeIndex int) error {
 	// 	               p                                     p
@@ -389,8 +387,8 @@ func (n *Node) merge(bNode *Node, bNodeIndex int) error {
 	//          a          b        c                     a            c
 	//         1,2         4        6,7                 1,2,3,4         6,7
 	aNode, err := n.getNode(n.childNodes[bNodeIndex-1])
-	if err!=nil{
-		return err 
+	if err != nil {
+		return err
 	}
 	// Take the item from the parent, remove it and add it to the unbalanced node
 	pNodeItem := n.items[bNodeIndex-1]
@@ -404,44 +402,42 @@ func (n *Node) merge(bNode *Node, bNodeIndex int) error {
 	}
 
 	n.writeNodes(aNode, n)
-	n.dal.deleteNode(bNode.pageNum)
+	n.tx.db.deleteNode(bNode.pageNum)
 	return nil
 }
-//3 Cases: Left rotate, right rotate , merge
+
+// 3 Cases: Left rotate, right rotate , merge
 func (n *Node) rebalanceRemove(unabalancedNode *Node, unbalancedNodeIndex int) error {
 	parent := n
 	//I can right rotate
-	if unbalancedNodeIndex != 0{
+	if unbalancedNodeIndex != 0 {
 		leftNode, err := n.getNode(parent.childNodes[unbalancedNodeIndex-1])
-		if err!=nil{
-			return err 
+		if err != nil {
+			return err
 		}
-		if leftNode.canSpareAnElement(){
+		if leftNode.canSpareAnElement() {
 			rotateRight(leftNode, unabalancedNode, parent, unbalancedNodeIndex)
-			n.writeNodes(leftNode, parent,unabalancedNode)
+			n.writeNodes(leftNode, parent, unabalancedNode)
 			return nil
 		}
 	}
-	if unbalancedNodeIndex != len(parent.childNodes)-1{
-		rightNode,err := n.getNode(parent.childNodes[unbalancedNodeIndex+1])
-		if err!=nil{
-			return err 
-		}
-		if rightNode.canSpareAnElement(){
-			rotateLeft(unabalancedNode,rightNode,parent,unbalancedNodeIndex)
-			n.writeNodes(unabalancedNode, parent,rightNode)
-			return nil
-		}
-	}
-	if unbalancedNodeIndex == 0{
+	if unbalancedNodeIndex != len(parent.childNodes)-1 {
 		rightNode, err := n.getNode(parent.childNodes[unbalancedNodeIndex+1])
-		if err!=nil{
-			return err 
+		if err != nil {
+			return err
 		}
-		return parent.merge(rightNode,unbalancedNodeIndex+1)
+		if rightNode.canSpareAnElement() {
+			rotateLeft(unabalancedNode, rightNode, parent, unbalancedNodeIndex)
+			n.writeNodes(unabalancedNode, parent, rightNode)
+			return nil
+		}
 	}
-	return parent.merge(unabalancedNode,unbalancedNodeIndex) 
+	if unbalancedNodeIndex == 0 {
+		rightNode, err := n.getNode(parent.childNodes[unbalancedNodeIndex+1])
+		if err != nil {
+			return err
+		}
+		return parent.merge(rightNode, unbalancedNodeIndex+1)
+	}
+	return parent.merge(unabalancedNode, unbalancedNodeIndex)
 }
-
-
-
