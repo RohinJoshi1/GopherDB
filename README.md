@@ -21,5 +21,9 @@ To install GopherDB, you need to have Go installed on your system. Follow these 
 
 3. Run the database:
     ```sh
-    go run
+    go run .
     ```
+4. View DB File:
+   ```sh
+   hexdump -c filename
+   ```
